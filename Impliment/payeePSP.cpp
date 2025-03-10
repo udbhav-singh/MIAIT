@@ -9,6 +9,8 @@
 #include <ctime>
 #include<string>
 #include <cmath>
+#include <queue>
+#include "utility.h"
 // #include <aes.h>
 // #include <modes.h>
 // #include <filters.h>
@@ -18,9 +20,8 @@
 
 using boost::asio::ip::tcp;
 
-
+std::queue<std::string> qToNPCI;
 int messageID = 0;
-
 pthread_mutex_t lock; 
 
 // using namespace CryptoPP;
@@ -132,105 +133,43 @@ std::string reconstructStringFromShares(const std::vector<std::vector<int>> &sha
     return reconstructed;
 }
 
-// Function to share to string and visa-versa
-
-
-// Function to convert a single share to a string
-std::string shareToString(const std::vector<int> &share) {
-    std::ostringstream oss;
-    for (size_t i = 0; i < share.size(); ++i) {
-        oss << share[i];
-        if (i != share.size() - 1) {
-            oss << ","; // Separate values with a comma
-        }
-    }
-    return oss.str();
-}
-
-// Function to convert a string back to a single share (vector)
-std::vector<int> stringToShare(const std::string &shareStr) {
-    std::vector<int> share;
-    std::istringstream iss(shareStr);
-    std::string valueStr;
-
-    // Split the string by commas to extract values
-    while (std::getline(iss, valueStr, ',')) {
-        share.push_back(std::stoi(valueStr));
-    }
-
-    return share;
-}
-
-
 // Function to handle communication with a single client
 void handle_client(tcp::socket socket) {
     try {
+        //allocating messageID and storing it in a local variable
         int messageIDlocal;
         pthread_mutex_lock(&lock); 
-
         messageID++;
         messageIDlocal = messageID;
         pthread_mutex_unlock(&lock); 
- 
+        std::cout<<"messageID is:"<<messageIDlocal<<std::endl;
         
-        std::cout<<"i am here"<<std::endl;
         // Buffer to store clientID
         boost::asio::streambuf buffer;
         boost::asio::read_until(socket, buffer, '\n');
-        std::cout<<"i am here1"<<std::endl;
+        std::cout<<"recived clientID"<<std::endl;
 
         // Extract clientID from the buffer----------------------------------
         std::istream input_stream(&buffer);
         std::string clientID;
         std::getline(input_stream, clientID);
         std::cout << "Client ID received: " << clientID << std::endl;
-        std::cout<<"i am here2"<<std::endl;
         //encript ClientID(to be done)------------------------------------------
 
-        //Distribute clientID to additive shares--------------------------------
+        //Distribute clientID to additive shares to-> shares[0], shares[1]--------------------------------
         int primeMod = generateRandomPrime(127);
-
         std::vector<std::vector<int>> shares = stringToAdditiveShares(clientID, primeMod);
+
+        //Adding other share to queue to send it to NPCI-------------------------------------------
+        std::string shareToNPCI = shareToString(shares[1]);
+        std::string toNPCI = makemsg(messageIDlocal,1,-1,shareToNPCI,"-1");
+        qToNPCI.push(toNPCI);
         
-        std::string share1Str = shareToString(shares[0]);
-        std::string share2Str = shareToString(shares[1]);
-
-        share1Str = std::to_string(messageIDlocal) + ',' + share1Str;
-        share2Str = std::to_string(messageIDlocal) + ',' + share2Str;
-        //Senting share to payee device
-        boost::asio::write(socket, boost::asio::buffer(share1Str));
-        std::cout << "Message sent to client: " << share1Str << std::endl;
-
-
-        //connecting to NPCI servers to NPCI-------------------------------------------
-        
-        try {
-        boost::asio::io_context io_context;
-
-        // Connect to the server
-        tcp::resolver resolver(io_context);
-        auto endpoints = resolver.resolve("127.0.0.1", "8085");
-        tcp::socket socket(io_context);
-        boost::asio::connect(socket, endpoints);
-
-        std::cout << "Connected to server!8085" << std::endl;
-
-        // Sent share2Str
-        boost::asio::write(socket, boost::asio::buffer(share2Str));
-        std::cout<<"sent to NPCI:"<< share2Str<< std::endl;
-
-        
-
-    } catch (std::exception& e) {
-        std::cerr << "Client error: " << e.what() << std::endl;
-    }
-
-
-
-
-
-
-
+        //Make and senting share to payee device--------------
+        std::string shareToPayeeDevice = shareToString(shares[0]);
+        std::string toPayeeDevice = makemsg(messageIDlocal,0,-1,shareToPayeeDevice,"-1");
+        boost::asio::write(socket, boost::asio::buffer(toPayeeDevice));
+        std::cout << "Message sent to payeeDevice: " << toPayeeDevice << std::endl;
 
 
         // Print the chosen prime and the shares
@@ -262,31 +201,65 @@ void handle_client(tcp::socket socket) {
     }
 }
 
+// Function to start listening on port 8083 for incoming connections
+void start_server(boost::asio::io_context& io_context, unsigned short port) {
+    try {
+        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
+        std::cout << "Server listening on port " << port << std::endl;
+
+        for (;;) {
+            tcp::socket socket(io_context);
+            acceptor.accept(socket);
+            std::thread(handle_client, std::move(socket)).detach();
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error starting server: " << e.what() << std::endl;
+    }
+} 
+
+// Function to handle the connection to the server on port 8085
+void connect_to_server(boost::asio::io_context& io_context, const std::string& server_address, unsigned short server_port) {
+    try {
+        tcp::resolver resolver(io_context);
+        tcp::resolver::results_type endpoints = resolver.resolve(server_address, std::to_string(server_port));
+
+        tcp::socket socket(io_context);
+        boost::asio::connect(socket, endpoints);
+
+        std::cout << "Connected to server at port " << server_port << std::endl;
+
+        while(true){
+            if(qToNPCI.empty()) continue;
+            else{
+                std::string message = qToNPCI.front() + "/n";
+                qToNPCI.pop();
+                boost::asio::write(socket, boost::asio::buffer(message));
+                std::cout << "Message sent to client: " << message;
+                
+            }
+        }
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error connecting to server: " << e.what() << std::endl;
+    }
+}
 
 int main() {
-
-
     try {
         boost::asio::io_context io_context;
 
-        // Create a TCP acceptor on port 8083
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 8083));
-        std::cout << "Server is running and waiting for connections on port 8083..." << std::endl;
+        // Start the server in a separate thread
+        std::thread server_thread([&io_context]() {
+            start_server(io_context, 8083);
+        });
 
-        while (true) {
-            // Wait for a client to connect
-            tcp::socket socket(io_context);
-            acceptor.accept(socket);
-            std::cout << "New client connected!" << std::endl;
+        // Connect to the remote server (e.g., localhost) on port 8085
+        connect_to_server(io_context, "", 8085);
 
-            // Handle the client connection in a separate thread
-            std::thread(handle_client, std::move(socket)).detach();
-        }
-    } catch (std::exception& e) {
-        std::cerr << "Server error: " << e.what() << std::endl;
+        server_thread.join();
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
     }
 
     return 0;
 }
-
-

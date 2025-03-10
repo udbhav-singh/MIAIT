@@ -7,123 +7,249 @@
 #include <thread>
 #include <mutex>
 #include <algorithm>
+#include <unordered_map>
+#include <ctime>
+#include <chrono>
+#include "utility.h"
 
 using boost::asio::ip::tcp;
 
-// Global storage for quadruples and a mutex for thread safety
-std::vector<std::array<int, 4>> quadruples;
-std::mutex quadruples_mutex;
+std::unordered_map<int, std::pair<std::vector<int>, std::vector<std::string>>> listOfpayees;
+std::vector<std::pair<std::vector<int>, std::vector<std::string>>> in_buffer;
+int first_time = 0;
 
-// Function to sort quadruples by the first element (x)
-void sort_quadruples() {
-    std::sort(quadruples.begin(), quadruples.end(), [](const std::array<int, 4>& a, const std::array<int, 4>& b) {
-        return a[0] < b[0];
-    });
+//to handle payer bank
+void handle_payer_bank_client(std::pair<std::vector<int>, std::vector<std::string>> messagedetails){
+    //this should be used to add all amount from different banks and sent credit requeset to all bank
+    //but since we are using only one bank total amount will be sent to it
+
+    //connenting to payer bank
+    boost::asio::io_context io_context;
+    tcp::resolver resolver(io_context);
+    tcp::resolver::results_type endpoints = resolver.resolve("", "8087");
+    tcp::socket socket(io_context);
+    boost::asio::connect(socket, endpoints);
+    std::cout << "Connected to server on port 8085\n";
+
+    //recive amount from bank
+    boost::asio::streambuf buffer;
+    boost::asio::read_until(socket, buffer, '\n');
+    std::cout << "recived message" << std::endl;
+    std::istream input_stream(&buffer);
+    std::string messagerevived;
+    std::getline(input_stream, messagerevived);
+    std::cout << "messagerevived : " << messagerevived << std::endl;
+
+    std::pair<std::vector<int>,std::vector<std::string>> message = parsemsg(messagerevived);
+
+    
+
+
+    
+    
 }
 
-// Function to perform binary search to find a quadruple with a certain x
-std::optional<std::array<int, 4>> binary_search_quadruple(int x) {
-    std::lock_guard<std::mutex> lock(quadruples_mutex); // Ensure thread safety
+// to handle payee client
+void handle_payee_client(std::pair<std::vector<int>, std::vector<std::string>> messagedetails)
+{
+    listOfpayees[messagedetails.first[0]] = messagedetails;
+}
 
-    int left = 0, right = quadruples.size() - 1;
+// to handle payer client
+void handle_payer_client(std::pair<std::vector<int>, std::vector<std::string>> messagedetails)
+{
+    std::pair<std::vector<int>, std::vector<std::string>> messagedetails_fromPayee = listOfpayees[messagedetails.first[0]];
+    // might possible we need to switch positions if do not work
+    std::vector<std::vector<int>> shares = {stringToShare(messagedetails.second[0]), stringToShare(messagedetails_fromPayee.second[0])};
+    std::string encryptedID = reconstructStringFromShares(shares, 127);
+    std::pair<std::vector<int>, std::vector<std::string>> new_message = messagedetails;
+    new_message.second[0] = encryptedID;
+    // check if ID exist.......................................................(to be done)
 
-    while (left <= right) {
-        int mid = left + (right - left) / 2; // Avoid overflow
-        int mid_x = quadruples[mid][0];
+    
 
-        if (mid_x == x) {
-            return quadruples[mid]; // Found the quadruple
-        } else if (mid_x < x) {
-            left = mid + 1; // Search in the right half
-        } else {
-            right = mid - 1; // Search in the left half
+    // step 10 time-stemps
+    //  Get current time
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm *local_time = std::localtime(&now_time);
+    std::cout << "time:" << local_time->tm_sec << std::endl;
+
+    // this part can be used for parallel computing
+    if (local_time->tm_sec % 3 == 0 || local_time->tm_sec % 3 == 1)
+    {
+        // green light, sent messagesIDs to bank
+        //////////////////////////////////////////
+        try
+        {
+            boost::asio::io_context io_context;
+            tcp::resolver resolver(io_context);
+            tcp::resolver::results_type endpoints = resolver.resolve("", "8089");
+            tcp::socket socket(io_context);
+            boost::asio::connect(socket, endpoints);
+            std::cout << "Connected to server on port 8089\n";
+
+            // for first time empty the buffer
+            if (first_time == 0)
+            {
+                // empty in_buffer
+                std::vector<std::pair<std::vector<int>, std::vector<std::string>>> statusOfBuffer;
+                for (int i = 0; i < in_buffer.size(); i++)
+                {
+                    // write all IDs which were left in buffer
+                    boost::asio::write(socket, boost::asio::buffer(makemsg(in_buffer[i].first[0], in_buffer[i].first[1], in_buffer[i].first[2], in_buffer[i].second[0], in_buffer[i].second[1])));
+
+                    // recive status back
+                    boost::asio::streambuf buffer;
+                    boost::asio::read_until(socket, buffer, '\n');
+                    std::istream input_stream(&buffer);
+                    std::string status;
+                    std::getline(input_stream, status);
+                    std::cout << "status recived: " << status << std::endl;
+                    statusOfBuffer.push_back(parsemsg(status));
+
+                    // return status to PSP(connection not made yet)
+                    try
+                    {
+                        boost::asio::io_context io_context;
+                        tcp::resolver resolver(io_context);
+                        tcp::resolver::results_type endpoints = resolver.resolve("", "8084");
+                        tcp::socket socket(io_context);
+                        boost::asio::connect(socket, endpoints);
+                        std::cout << "Connected to server on port 8084\n";
+
+                        // sent to PSP(connection not made in PSP)
+                        boost::asio::write(socket, boost::asio::buffer(status));
+                    }
+                    catch (std::exception &e)
+                    {
+                        std::cerr << "Exception: " << e.what() << "\n";
+                    }
+                }
+                first_time = 1;
+                // empty vector buffer(to be done)
+            }
+            //write current stuff
+            boost::asio::write(socket, boost::asio::buffer(makemsg(new_message.first[0], new_message.first[1], new_message.first[2], new_message.second[0], new_message.second[1])));
+            
+            // recive status back
+            boost::asio::streambuf buffer;
+            boost::asio::read_until(socket, buffer, '\n');
+            std::istream input_stream(&buffer);
+            std::string status;
+            std::getline(input_stream, status);
+            std::cout << "status recived: " << status << std::endl;
+
+            // return status to PSP(connection not made yet)(to be done)
+            try
+            {
+                boost::asio::io_context io_context;
+                tcp::resolver resolver(io_context);
+                tcp::resolver::results_type endpoints = resolver.resolve("", "8084");
+                tcp::socket socket(io_context);
+                boost::asio::connect(socket, endpoints);
+                std::cout << "Connected to server on port 8084\n";
+                // sent to PSP(connection not made in PSP)
+                boost::asio::write(socket, boost::asio::buffer(status));
+            }
+            catch (std::exception &e)
+            {
+                std::cerr << "Exception: " << e.what() << "\n";
+            }
+        }
+        catch (std::exception &e)
+        {
+            std::cerr << "Exception: " << e.what() << "\n";
         }
     }
+    else
+    {
+        // buffer stop sending messageIDs,store it
+        in_buffer.push_back(new_message);
+        if (first_time == 1)
+        {
+            // steps 13 to 19 transfer money and sent status
 
-    return std::nullopt; // Return empty if no quadruple is found
-}
 
-// Function to parse and store the received message
-void process_message(const std::string& message) {
-    try {
-        std::istringstream iss(message);
-        int x, y, z, w;
-        char comma1, comma2, comma3;
-
-        // Parse the message in the form of "int,int,int,int"
-        if (iss >> x >> comma1 >> y >> comma2 >> z >> comma3 >> w && comma1 == ',' && comma2 == ',' && comma3 == ',') {
-            std::cout << "Parsed quadruple: (" << x << ", " << y << ", " << z << ", " << w << ")" << std::endl;
-
-            if (w == 0) { // Store the quadruple only if w == 0
-                // Lock the mutex and store the quadruple
-                std::lock_guard<std::mutex> lock(quadruples_mutex);
-                quadruples.push_back({x, y, z, w});
-                sort_quadruples();
-                std::cout << "Stored quadruple: (" << x << ", " << y << ", " << z << ", " << w << ")" << std::endl;
-            } else { // Handle the search case if w != 0
-                auto result = binary_search_quadruple(x);
-                if (result) {
-                    const auto& [rx, ry, rz, rw] = *result;
-                    std::cout << "Found quadruple: (" << rx << ", " << ry << ", " << rz << ", " << rw << ")" << std::endl;
-
-                    
-                } else {
-                    std::cout << "No quadruple found with x = " << x << std::endl;
-                }
-            }
-        } else {
-            std::cerr << "Invalid message format: " << message << std::endl;
+            first_time = 0;
         }
-    } catch (const std::exception& e) {
-        std::cerr << "Error processing message: " << e.what() << std::endl;
     }
 }
 
 // Function to handle a client connection
-void handle_client(tcp::socket socket) {
-    try {
+void handle_client(tcp::socket socket)
+{
+    try
+    {
         std::cout << "Client connected from: " << socket.remote_endpoint() << std::endl;
 
-        for (;;) {
-            char data[1024] = {0};
+        while (1)
+        {
+            std::string messagerevived;
 
-            // Read data from the client
-            size_t length = socket.read_some(boost::asio::buffer(data));
-            std::string message(data, length);
+            // Read a message from the client
+            boost::asio::streambuf buffer;
+            boost::asio::read_until(socket, buffer, '\n');
+            std::cout << "recived message" << std::endl;
+            std::istream input_stream(&buffer);
+            std::getline(input_stream, messagerevived);
+            std::cout << "messagerevived : " << messagerevived << std::endl;
 
-            std::cout << "Received message: " << message << std::endl;
-
-            // Process and store the message
-            process_message(message);
+            std::pair<std::vector<int>, std::vector<std::string>> messageDetails = parsemsg(messagerevived);
+            
+            if (messageDetails.first[1] == 1)
+            {
+                // message is from psyee
+                handle_payee_client(messageDetails);
+            }
+            else if(messageDetails.first[1] == 0)
+            {
+                // message is from payer
+                handle_payer_client(messageDetails);
+            }
+            else if(messageDetails.first[1] == 3){
+                //recive total amount from payer bank
+                handle_payer_bank_client(messageDetails);
+            }
         }
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception &e)
+    {
         std::cerr << "Error handling client: " << e.what() << std::endl;
     }
 }
 
 // Function to start the server
-void start_server(boost::asio::io_context& io_context, unsigned short port) {
-    try {
+void start_server(boost::asio::io_context &io_context, unsigned short port)
+{
+    try
+    {
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
         std::cout << "Server listening on port " << port << std::endl;
 
-        for (;;) {
+        while (1)
+        {
             tcp::socket socket(io_context);
             acceptor.accept(socket);
             std::thread(handle_client, std::move(socket)).detach();
         }
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception &e)
+    {
         std::cerr << "Error starting server: " << e.what() << std::endl;
     }
 }
 
-int main() {
-    try {
+int main()
+{
+    try
+    {
         boost::asio::io_context io_context;
-
         // Start the server on port 8085
         start_server(io_context, 8085);
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception &e)
+    {
         std::cerr << "Error: " << e.what() << std::endl;
     }
 

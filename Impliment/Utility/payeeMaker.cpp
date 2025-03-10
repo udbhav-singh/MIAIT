@@ -2,6 +2,7 @@
 #include <iostream>
 #include <memory>
 #include <thread>
+#include <bits/stdc++.h>
 
 using boost::asio::ip::tcp;
 
@@ -16,6 +17,23 @@ void handle_client(tcp::socket socket, int clientID) {
         std::cerr << "Error handling client: " << e.what() << std::endl;
     }
 }
+std::vector<int> parsemsg(const std::string& input) {
+    std::vector<int> numbers;
+    std::stringstream ss(input);
+    std::string token;
+    
+    while (std::getline(ss, token, ',')&& numbers.size() < 5) {
+        numbers.push_back(std::stoi(token));
+    }
+
+    return numbers;
+}
+std::string makemsg(std::string a, int b, int c, int d, int e) {
+    std::stringstream ss;
+    ss << a << "," << b << "," << c << "," << d << "," << e<<",";
+    return ss.str();
+}
+
 
 int main() {
     int clientID = 0;

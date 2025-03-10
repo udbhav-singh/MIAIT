@@ -1,0 +1,26 @@
+8081-payeeMaker
+8082-payerMaker
+8083-payeePSP
+8084-payerPSP
+8085-NPCI
+8086-payerBank
+8087-payeeBank
+8088-payeeDevice
+8089-payerDevice
+
+message formate-> messageID, from payerPSP(0) or payeePSP(1),  from NPCI(0) or payerPSP(1), share(enc(clintID)), share(amount). 
+                ->messageID, 2(for return stuts),ststus(1 for good),clintID, if any problem write here
+                ->-1,3(for senting total amount), total amount,NA,NA
+use same Prime number every where <127>
+
+for testing we are taking times as 2 seconds to take inputs and 1 sec(may be 5 partitions are needed, will be decided) for buffer
+recognized by mins 60 sec.
+
+assumption while implimentation: 2 banks ,2 PSPs (easy yo make it for many,hopefully)
+
+we can use thread.awaite() id needed in future
+dont use else if not nessecery
+
+increase in memory is because of non deleating unordered_,map
+
+14,15 status return babana he

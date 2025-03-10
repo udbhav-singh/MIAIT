@@ -3,7 +3,7 @@
 #include <thread>
 #include <memory>
 #include <queue>
-
+#include "utility.h"
 using boost::asio::ip::tcp;
 
 std::queue<std::string> qClientID;
@@ -40,9 +40,7 @@ std::vector<std::vector<int>> stringToAdditiveShares(const std::string &secret, 
         // Generate the first random share
         shares[0][i] = std::rand() % primeMod;
 
-        // Calculate the second share
-        shares[1][i] = (asciiVal - shares[0][i] + primeMod) % primeMod;
-    }
+        // Calc
 
     return shares;
 }
@@ -93,32 +91,7 @@ std::vector<int> stringToShare(const std::string &shareStr) {
 }
 
 
-// Function to handle the connection to the server on port 8085
-void connect_to_server(boost::asio::io_context& io_context, const std::string& server_address, unsigned short server_port) {
-    try {
-        tcp::resolver resolver(io_context);
-        tcp::resolver::results_type endpoints = resolver.resolve(server_address, std::to_string(server_port));
 
-        tcp::socket socket(io_context);
-        boost::asio::connect(socket, endpoints);
-
-        std::cout << "Connected to server at port " << server_port << std::endl;
-
-        while(true){
-            if(qClientID.empty()) continue;
-            else{
-                std::string message = qClientID.front() + "/n";
-                qClientID.pop();
-                boost::asio::write(socket, boost::asio::buffer(message));
-                std::cout << "Message sent to client: " << message;
-                
-            }
-        }
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error connecting to server: " << e.what() << std::endl;
-    }
-}
 
 // Function to handle incoming client connections on port 8083
 void handle_client(tcp::socket socket) {
@@ -155,8 +128,8 @@ void handle_client(tcp::socket socket) {
         std::string share1Str = shareToString(shares[0]);
         std::string share2Str = shareToString(shares[1]);
 
-        share1Str = std::to_string(messageIDlocal) + ',' + share1Str + ',' + '0';
-        share2Str = std::to_string(messageIDlocal) + ',' + share2Str + ',' + '1';
+        share1Str =makemsg(messageIDlocal,0,0,share1Str,-1);// std::to_string(messageIDlocal) + ',' + share1Str + ',' + '0';
+        share2Str =makemsg(messageIDlocal,1,1,share2Str,-1);// std::to_string(messageIDlocal) + ',' + share2Str + ',' + '1';
         //Senting share to payee device
         boost::asio::write(socket, boost::asio::buffer(share1Str));
         std::cout << "Message sent to client: " << share1Str << std::endl;

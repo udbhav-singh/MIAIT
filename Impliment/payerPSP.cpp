@@ -3,10 +3,11 @@
 #include <thread>
 #include <memory>
 #include <queue>
+#include "utility.h" 
 
 using boost::asio::ip::tcp;
 
-std::queue<std::string> qClientID;
+std::queue<std::string> qToNPCI;
 int messageID = 0;
 pthread_mutex_t lock; 
 
@@ -105,10 +106,10 @@ void connect_to_server(boost::asio::io_context& io_context, const std::string& s
         std::cout << "Connected to server at port " << server_port << std::endl;
 
         while(true){
-            if(qClientID.empty()) continue;
+            if(qToNPCI.empty()) continue;
             else{
-                std::string message = qClientID.front() + "/n";
-                qClientID.pop();
+                std::string message = qToNPCI.front() + "/n";
+                qToNPCI.pop();
                 boost::asio::write(socket, boost::asio::buffer(message));
                 std::cout << "Message sent to client: " << message;
                 
@@ -122,53 +123,46 @@ void connect_to_server(boost::asio::io_context& io_context, const std::string& s
 
 
 
-// Function to handle incoming client connections on port 8083
+// Function to handle incoming client connections on port 8084
 void handle_client(tcp::socket socket) {
     try {
         // Buffer to store clientID------------------------------
         boost::asio::streambuf buffer;
         boost::asio::read_until(socket, buffer, '\n');
-        std::cout<<"i am here1"<<std::endl;
 
         // Extract clientID from the buffer----------------------------------
         std::istream input_stream(&buffer);
         std::string transactionInformation;
         std::getline(input_stream, transactionInformation);
-        std::cout << "Client ID received: " << transactionInformation << std::endl;
-        std::cout<<"i am here2"<<std::endl;
-
-
-        //convert info to string
-        std::istringstream iss(transactionInformation);
-        int x,y,z,w;
-        char c1,c2,c3;
-        if(iss >> x >> c1 >> y >> c2 >> z >> c3 >> w && c1 == ',' && c2 == ',' && c3 == ',')
-            std::cout << "Parsed quadruple: (" << x << ", " << y << ", " << z << ", " << w << ")" << std::endl;
-        else
-            std::cerr << "Invalid message format: " << transactionInformation << std::endl;
+        std::cout << "message by payeeDevice received: " << transactionInformation << std::endl;
+        std::pair<std::vector<int>,std::vector<std::string>> messageDetails = parsemsg(transactionInformation);
         
         //Distribute amount to additive shares--------------------------------
+        std::string amount = messageDetails.second[1];
         int primeMod = generateRandomPrime(127);
-
-        std::vector<std::vector<int>> shares = stringToAdditiveShares(std::to_string(w), primeMod);
+        std::vector<std::vector<int>> shares = stringToAdditiveShares(amount, primeMod);
         
         std::string share1Str = shareToString(shares[0]);
         std::string share2Str = shareToString(shares[1]);
 
-        share1Str = std::to_string(x) + ',' + std::to_string(y) + ',' + std::to_string(z) + ',' + share1Str;
-        share1Str = std::to_string(x) + ',' + std::to_string(y) + ',' + std::to_string(z) + ',' + share2Str;
-        
+        //add to q to sent to NPCI-----------------------------------
+        std::string toNPCI = makemsg(messageDetails.first[0],messageDetails.first[1],0,messageDetails.second[0],share1Str;
+        qToNPCI.push(toNPCI);
+        std::cout<<"added to queue:"<<toNPCI<<std::endl;
 
-        //somehow sent s1 to NPCI-----------------------------------
-        qClientID.push(share1Str);
-
-
-
-        //sent s2 to bank payer--------------------------------
-        
-
-
-
+        //sent s2 to bank payer via connecting to server--------------------------------
+        try {
+            boost::asio::io_context io_context;
+            tcp::resolver resolver(io_context);
+            tcp::resolver::results_type endpoints = resolver.resolve("", "8086");
+            tcp::socket socket(io_context);
+            boost::asio::connect(socket, endpoints);
+            std::string toPayerBank = makemsg(messageDetails.first[0],messageDetails.first[1],1,messageDetails.second[0],share2Str);
+            boost::asio::write(socket, boost::asio::buffer(toPayerBank));
+            std::cout << "Message sent to payerBank: " << toPayerBank<<std::endl;
+        } catch (std::exception& e) {
+            std::cerr << "Exception: " << e.what() << std::endl;
+        }
         //extras========================================
 
         // Print the chosen prime and the shares
@@ -191,7 +185,7 @@ void handle_client(tcp::socket socket) {
     }
 }
 
-// Function to start listening on port 8083 for incoming connections
+// Function to start listening on port 8084 for incoming connections
 void start_server(boost::asio::io_context& io_context, unsigned short port) {
     try {
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
